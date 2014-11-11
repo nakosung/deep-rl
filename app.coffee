@@ -1,7 +1,11 @@
 {Brain} = require './convnetjs/deepqlearn'
 _ = require 'lodash'
+fs = require 'fs'
+jsonfile = require 'jsonfile'
 
-num_agents = 4
+path = 'network.json'
+
+num_agents = 6
 
 temporal_window = 1
 num_inputs = num_agents * 5 - 1
@@ -28,13 +32,12 @@ opt =
 	layer_defs : layer_defs
 	tdtrainer_options : tdtrainer_options
 
-world_size = 8
+world_size = 16
 screen_size = 20
 grid = Math.floor screen_size / world_size
 max_hp = 5
 cooldown = 5
 range = 3
-heal_range = 2
 
 pos = (x) ->
 	x / world_size
@@ -177,6 +180,7 @@ class World
 		
 		@clock = 0
 		@logs = []
+		@load(path) if fs.exists(path)
 		
 
 	log : (x...) ->
@@ -218,6 +222,7 @@ class World
 			
 
 		@dump() if @clock > opt.learning_steps_burnin / 2 or @clock % 5 == 0 
+		@save(path) if @clock % 100 == 0
 		#@quake() if @clock % 100 == 0
 
 	quake : ->
@@ -231,6 +236,13 @@ class World
 		@logs.map (log,k) ->
 			TermUI.pos(40,k).out(log)
 		TermUI.pos(0, grid*world_size+2).out("clock:#{@clock}").pos(0,grid*world_size+4)
+
+	save : (file) ->
+		jsonfile.writeFileSync(file, @brain.value_net.toJSON())
+
+	load : (file) ->
+		json = jsonfile.readFileSync(file)
+		@brain.value_net.fromJSON(json)
 		
 world = new World()
 while true
