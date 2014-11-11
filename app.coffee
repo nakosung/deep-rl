@@ -180,7 +180,7 @@ class World
 		
 		@clock = 0
 		@logs = []
-		@load(path) if fs.exists(path)
+		@load(path) if fs.existsSync(path)
 		
 
 	log : (x...) ->
@@ -239,10 +239,12 @@ class World
 
 	save : (file) ->
 		jsonfile.writeFileSync(file, @brain.value_net.toJSON())
+		@log 'network saved'
 
 	load : (file) ->
 		json = jsonfile.readFileSync(file)
 		@brain.value_net.fromJSON(json)
+		@log 'network loaded'
 		
 world = new World()
 while true
