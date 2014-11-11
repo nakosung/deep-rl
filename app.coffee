@@ -167,8 +167,15 @@ class Agent
 					@reward -= 10 # cannot do that
 
 	dump : ->
-		TermUI.pos(@x*grid,@y*grid).fg(@team+5).out("#{@id}").pos(grid*@x,grid*@y+1).out("#{@hp}/#{@cooldown}")
-	
+		TermUI.pos(@x*grid,@y*grid).fg(@team+5).out("#{@id}").pos(grid*@x,grid*@y+1)
+		text = []
+		if @hp < max_hp
+			text.push "H:#{@hp - max_hp}"
+		if @cooldown
+			text.push "C:#{@cooldown}"
+		if text.length
+			TermUI.out text.join('/')
+		
 class World
 	constructor : ->
 		@next_id = 0
