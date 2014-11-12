@@ -2,37 +2,40 @@
 _ = require 'lodash'
 fs = require 'fs'
 jsonfile = require 'jsonfile'
+argv = require('minimist')(process.argv.slice(2))
 
 path = 'network.json'
 
 num_agents = 4
 
-temporal_window = 1
-num_inputs = 1 + num_agents * 6 - 1
+temporal_window = 2
+num_inputs = num_agents * 6
 num_actions = 5 + num_agents-1
 network_size = num_inputs * temporal_window + num_actions * temporal_window + num_inputs
 
 layer_defs = []
 layer_defs.push type:'input', out_sx:1, out_sy:1, out_depth:network_size
-layer_defs.push type:'fc', num_neurons:50, activation:'relu'
-layer_defs.push type:'fc', num_neurons:50, activation:'relu'
+layer_defs.push type:'fc', num_neurons:70, activation:'relu'
+layer_defs.push type:'fc', num_neurons:70, activation:'relu'
 layer_defs.push type:'regression', num_neurons:num_actions
 
 tdtrainer_options = learning_rate:0.001, momentum:0.0, batch_size:64, l2_decay:0.01
 
+speed_factor = argv.speed or 1
+
 opt = 
 	temporal_window : temporal_window
-	experience_size : 3000
-	start_learn_threshold : 100
-	gamma : 0.8
-	learning_steps_total : 20000
-	learning_steps_burnin : 300
+	experience_size : 30000 / speed_factor
+	start_learn_threshold : 1000 / speed_factor
+	gamma : 0.85
+	learning_steps_total : 200000 / speed_factor
+	learning_steps_burnin : 3000 / speed_factor
 	epsilon_min : 0.05
-	epsilon_test_time : 0.02
+	epsilon_test_time : 0.05
 	layer_defs : layer_defs
 	tdtrainer_options : tdtrainer_options
 
-world_size = 10
+world_size = argv.world_size or 16
 screen_size = 20
 grid = Math.floor screen_size / world_size
 max_hp = 10
@@ -63,13 +66,13 @@ TermUI =
 		this
 
 class Agent
+	actions : [ [1,0], [-1,0], [0,1], [0,-1], 'nothing' ]
+
 	constructor : (@world,@brain,@team) ->
 		@y = (world_size-1) * @team
 		@x = world_size >> 1
-		@hp = max_hp
-		@actions = [ [1,0], [-1,0], [0,1], [0,-1], 'nothing' ]
+		@hp = max_hp		
 		@vel = [0,0]
-		@digestion_signal = 0
 		@reward = 0
 		@cooldown_heal = 0
 		@cooldown = 0
@@ -81,7 +84,7 @@ class Agent
 		return if @is_dead()
 
 		enemies = @world.enemy(@)
-		input_array = [@team,pos(@x),pos(@y),@hp/max_hp,@cooldown/cooldown,@cooldown_heal,cooldown_heal]
+		input_array = [@team,pos(@x),pos(@y),@hp/max_hp,@cooldown/cooldown,@cooldown_heal/cooldown_heal]
 		for enemy in enemies
 			t = enemy.team * 0.5 
 			t = 1 if enemy.is_dead()
@@ -99,12 +102,18 @@ class Agent
 		dy = enemy.y - @y
 		[dx,dy]
 
+	name : ->
+		"#{@team}:#{@id}"
+
+	rel_log : (subject,rel) ->
+		@world.log "#{subject?.name()} #{rel} #{@name()}"
+
 	take_damage : (attacker) ->
-		@world.log "#{@id} attacked by #{attacker?.id}"
+		@rel_log attacker, "-"
 		@hp -= 1
 		if @hp > 0
 			if attacker?
-				attacker.reward += 1			
+				attacker.reward += 10
 		else
 			@hp = 0
 			@die(attacker)
@@ -112,26 +121,27 @@ class Agent
 	is_dead : -> @hp == 0
 
 	die : (attacker) ->
-		@world.log "#{@id} killed by #{attacker?.id}"		
+		@rel_log attacker, "X"
 		if attacker?
+			@world.scores[attacker.team]++
 			attacker.heal()
-			attacker.reward += 20
+			attacker.reward += 200
 		else
 			@reward -= 5
 		@reward -= 5
 		for agent in @world.agents
 			if agent != @ and agent != attacker
 				if agent.team == @team
-					agent.reward -= 5
+					agent.reward -= 50
 				else if attacker?
-					agent.reward += 10
+					agent.reward += 100
 		@die_counter = deadbody_sleep
 
 	heal : (healer) ->
 		if @hp == max_hp
 			healer?.reward -= 100
 		else
-			@world.log "#{@id} healed by #{healer?.id}"
+			@rel_log healer, "+"
 		
 			@hp = Math.min(max_hp,@hp+2)
 			@reward += 1
@@ -225,18 +235,30 @@ class Agent
 class World
 	constructor : ->
 		@next_id = 0
-		@brains = [0,1].map -> new Brain(num_inputs, num_actions, opt)
-		@learning = true
+		@scores = [0,0]
+		@brains = [1..num_agents].map -> new Brain(num_inputs, num_actions, opt)		
+		@free_brains = @brains.slice()
 
-		brain.learning = @learning for brain in @brains		
+		@learning = not argv.run
+
+		@clock = 0
+		@logs = []				
+
+		@brains_for_teams = [@free_brains,@free_brains]
+		@brainpool_for_teams = [@brains,@brains]
+		unless @learning			
+			@trained_brains = [1..num_agents].map -> new Brain(num_inputs, num_actions, opt)		
+			@load(path,@trained_brains) 			
+			brain.learning = false for brain in @trained_brains		
+			@free_trained_brains = @trained_brains.slice()
+			@brains_for_teams[0] = @free_trained_brains		
+			@brains_for_teams[1] = @free_trained_brains		
+
 		
 		@agents = []
 
 		@spawn(x&1) for x in [1..num_agents]
 		
-		@clock = 0
-		@logs = []
-		@load(path) if fs.existsSync(path)
 		
 
 	log : (x...) ->
@@ -247,7 +269,8 @@ class World
 		@next_id++
 
 	spawn : (team) ->
-		@agents.push new Agent(@,@brains[team],team)
+		brain = @brains_for_teams[team].pop()		
+		@agents.push new Agent(@,brain,team)
 
 	enemy : (me) ->
 		enemies = _.filter @agents, (x) -> x != me
@@ -269,6 +292,7 @@ class World
 		if deads.length
 			@agents = _.filter @agents, (x) -> not x.dead
 			for dead in deads
+				@brains_for_teams[dead.team].push dead.brain
 				@spawn(dead.team)
 			
 		
@@ -288,18 +312,22 @@ class World
 		TermUI.fg(7)
 		@logs.map (log,k) ->
 			TermUI.pos(40,k).out(log)
-		TermUI.pos(0, grid*world_size+2).out("clock:#{@clock}").pos(0,grid*world_size+4)
+		TermUI.pos(0, grid*world_size+2).out("clock:#{@clock} score:#{@scores.join(':')}").pos(0,grid*world_size+4)
 		@brains.map (brain,k) ->
 			TermUI.pos(0,grid*world_size+3+k).out("eps:#{brain.epsilon} age:#{brain.age}, loss:#{brain.average_loss_window.get_average()}, s-reward:#{brain.average_reward_window.get_average()}")
 
 	save : (file) ->
+		return
 		jsonfile.writeFileSync("#{team}-#{file}", brain.value_net.toJSON()) for brain,team in @brains
 		@log 'network saved'
 
-	load : (file) ->
-		brain.value_net.fromJSON(jsonfile.readFileSync("#{team}-#{file}")) for brain in @brains
+	load : (file,brains) ->
+		brain.value_net.fromJSON(jsonfile.readFileSync("#{team}-#{file}")) for brain,team in brains
 		@log 'network loaded'
 		
 world = new World()
-while true
-	world.tick() 
+if world.learning
+	while true
+		world.tick() 
+else		
+	setInterval world.tick.bind(world), 1/10
