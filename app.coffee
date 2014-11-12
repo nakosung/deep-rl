@@ -125,16 +125,16 @@ class Agent
 		if attacker?
 			@world.scores[attacker.team]++
 			attacker.heal()
-			attacker.reward += 200
+			attacker.reward += 20
 		else
 			@reward -= 5
 		@reward -= 5
 		for agent in @world.agents
 			if agent != @ and agent != attacker
 				if agent.team == @team
-					agent.reward -= 50
+					agent.reward -= 5
 				else if attacker?
-					agent.reward += 100
+					agent.reward += 10
 		@die_counter = deadbody_sleep
 
 	heal : (healer) ->
@@ -144,7 +144,7 @@ class Agent
 			@rel_log healer, "+"
 		
 			@hp = Math.min(max_hp,@hp+2)
-			@reward += 1
+			@reward += 0.1
 
 	skill : (enemy) ->
 		if enemy.team == @team
@@ -204,14 +204,14 @@ class Agent
 		# 관성이 좋아요!
 		dx = @vel[0] - old_vel[0] 
 		dy = @vel[1] - old_vel[1]
-		@reward -= dx * dx + dy * dy
+		@reward -= (dx * dx + dy * dy) * 0.1
 
 		dx = (@x - world_size / 2) / world_size
 		dy = (@y - world_size / 2) / world_size
 
-		@reward += Math.max( 0, 1.0/4 - (dx * dx + dy * dy) ) * 4
+		@reward += Math.max( 0, 1.0/4 - (dx * dx + dy * dy) ) * 4 - 2
 
-		@reward += @hp / max_hp
+		@reward += @hp / max_hp - 0.5
 
 	color : ->
 		TermUI.fg(@team+5)
@@ -299,7 +299,7 @@ class World
 		#@quake() if @clock % 100 == 0
 
 		@dump() if not @learning or @clock > opt.learning_steps_burnin or @clock % 5 == 0 
-		@save(path) if @learning and @clock % 100 == 0
+		@save(path) if @learning and @clock % 5000 == 0
 
 	quake : ->
 		for agent in @agents
