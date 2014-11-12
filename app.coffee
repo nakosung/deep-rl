@@ -5,10 +5,10 @@ jsonfile = require 'jsonfile'
 
 path = 'network.json'
 
-num_agents = 6
+num_agents = 4
 
 temporal_window = 1
-num_inputs = num_agents * 5 - 1
+num_inputs = 1 + num_agents * 6 - 1
 num_actions = 5 + num_agents-1
 network_size = num_inputs * temporal_window + num_actions * temporal_window + num_inputs
 
@@ -22,22 +22,25 @@ tdtrainer_options = learning_rate:0.001, momentum:0.0, batch_size:64, l2_decay:0
 
 opt = 
 	temporal_window : temporal_window
-	experience_size : 30000
-	start_learn_threshold : 1000
-	gamma : 0.7
-	learning_steps_total : 200000
-	learning_steps_burnin : 3000
+	experience_size : 3000
+	start_learn_threshold : 100
+	gamma : 0.8
+	learning_steps_total : 20000
+	learning_steps_burnin : 300
 	epsilon_min : 0.05
-	epsilon_test_time : 0.05
+	epsilon_test_time : 0.02
 	layer_defs : layer_defs
 	tdtrainer_options : tdtrainer_options
 
-world_size = 16
+world_size = 10
 screen_size = 20
 grid = Math.floor screen_size / world_size
-max_hp = 5
-cooldown = 5
+max_hp = 10
+cooldown = 2
+cooldown_heal = 20
+deadbody_sleep = if num_agents > 2 then 1 else 1
 range = 3
+range_heal = 3
 
 pos = (x) ->
 	x / world_size
@@ -61,24 +64,33 @@ TermUI =
 
 class Agent
 	constructor : (@world,@brain,@team) ->
-		@x = Math.floor(Math.random() * world_size) + 1
-		@y = Math.floor(Math.random() * world_size) + 1
+		@y = (world_size-1) * @team
+		@x = world_size >> 1
 		@hp = max_hp
 		@actions = [ [1,0], [-1,0], [0,1], [0,-1], 'nothing' ]
+		@vel = [0,0]
 		@digestion_signal = 0
 		@reward = 0
+		@cooldown_heal = 0
 		@cooldown = 0
 		@dead = false
 		@id = @world.alloc_id()
+		@dead_counter = 0
 
 	forward : ->
+		return if @is_dead()
+
 		enemies = @world.enemy(@)
-		input_array = [pos(@x),pos(@y),@hp/max_hp,@cooldown/cooldown]
+		input_array = [@team,pos(@x),pos(@y),@hp/max_hp,@cooldown/cooldown,@cooldown_heal,cooldown_heal]
 		for enemy in enemies
-			input_array = input_array.concat [pos(enemy.x-@x),pos(enemy.y-@y),enemy.hp/max_hp,enemy.cooldown/cooldown,Math.abs(@team - enemy.team)]
+			t = enemy.team * 0.5 
+			t = 1 if enemy.is_dead()
+			input_array = input_array.concat [pos(enemy.x-@x),pos(enemy.y-@y),enemy.hp/max_hp,enemy.cooldown/cooldown,enemy.cooldown_heal/cooldown_heal,t]
 		@action = @brain.forward input_array
 
 	backward : ->
+		return if @is_dead()
+
 		@brain.backward @reward
 		@reward = 0
 
@@ -92,94 +104,131 @@ class Agent
 		@hp -= 1
 		if @hp > 0
 			if attacker?
-				attacker.reward += 1
-			@reward -= 2
+				attacker.reward += 1			
 		else
+			@hp = 0
 			@die(attacker)
 
+	is_dead : -> @hp == 0
+
 	die : (attacker) ->
-		@world.log "#{@id} killed by #{attacker?.id}"
+		@world.log "#{@id} killed by #{attacker?.id}"		
 		if attacker?
-			attacker.hp = max_hp
-			attacker.reward += 10
-		@reward -= 20
+			attacker.heal()
+			attacker.reward += 20
+		else
+			@reward -= 5
+		@reward -= 5
 		for agent in @world.agents
 			if agent != @ and agent != attacker
 				if agent.team == @team
 					agent.reward -= 5
 				else if attacker?
-					agent.reward += 5
-		@dead = true
+					agent.reward += 10
+		@die_counter = deadbody_sleep
 
 	heal : (healer) ->
 		if @hp == max_hp
-			healer?.reward -= 10
+			healer?.reward -= 100
 		else
 			@world.log "#{@id} healed by #{healer?.id}"
 		
-			@hp = Math.min(max_hp,@hp+1)
+			@hp = Math.min(max_hp,@hp+2)
 			@reward += 1
-			healer?.reward += 5
 
 	skill : (enemy) ->
-		return if enemy.dead
-
 		if enemy.team == @team
-			enemy.heal(@)
+			if @cooldown_heal > 0 or not @check_dist(enemy,range)
+				@reward -= 100
+			else
+				@cooldown_heal = cooldown_heal
+				enemy.heal(@)
 		else
-			enemy.take_damage(@)
+			if @cooldown > 0 or not @check_dist(enemy,range_heal)
+				@reward -= 100
+			else
+				enemy.take_damage(@)
+				@cooldown = cooldown
+
+	check_dist : (target,range) ->
+		[dx,dy] = @distance target
+		dx*dx + dy*dy <= range * range
 
 	tick : ->
+		if @die_counter > 0
+			if --@die_counter == 0
+				@dead = true
+			return
+
+		old_vel = @vel
+		@vel = [0,0]
+
 		# if @x * 2 == world_size and @y * 2 == world_size
 		# 	@heal()
 
 		if @action < num_agents-1
 			enemy = @world.enemy(@)[@action]
-			[dx,dy] = @distance enemy
-			sq_dist = dx*dx + dy*dy
-			sq_range = range*range
-			if sq_dist > sq_range or @cooldown > 0
-				@reward -= 10 # cannot do that
-			else
-				@cooldown = cooldown
-
-				if Math.random() < (sq_dist - 1) / sq_range
-					@skill enemy
-					@world.log "#{@id} got critical"
-					@skill enemy
-				else
-					@skill enemy
+			if enemy.is_dead()
+				@reward -= 100
+				return 
+			
+			@skill enemy
 					
 		else
 			@cooldown-- if @cooldown > 0
+			@cooldown_heal-- if @cooldown_heal > 0
 
 			action = @actions[@action - num_agents + 1]
 
 			if action == 'nothing'
 
 			else
-				[dx,dy] = action
+				@vel = [dx,dy] = action
 				old_x = @x
 				old_y = @y
 				@x = Math.max(1,Math.min(world_size,@x + dx))
 				@y = Math.max(1,Math.min(world_size,@y + dy))
 				if old_x == @x and old_y == @y
-					@reward -= 10 # cannot do that
+					@reward -= 100 # cannot do that
+
+		# 관성이 좋아요!
+		dx = @vel[0] - old_vel[0] 
+		dy = @vel[1] - old_vel[1]
+		@reward -= dx * dx + dy * dy
+
+		dx = (@x - world_size / 2) / world_size
+		dy = (@y - world_size / 2) / world_size
+
+		@reward += Math.max( 0, 1.0/4 - (dx * dx + dy * dy) ) * 4
+
+		@reward += @hp / max_hp
+
+	color : ->
+		TermUI.fg(@team+5)
 
 	dump : ->
-		TermUI.pos(@x*grid,@y*grid).fg(@team+5).out("#{@id}").pos(grid*@x,grid*@y+1)
+		@color()
+		TermUI.pos(@x*grid,@y*grid).out("#{@id}").pos(grid*@x,grid*@y+1)
 		text = []
-		if @hp < max_hp
-			text.push "H:#{@hp - max_hp}"
-		if @cooldown
-			text.push "C:#{@cooldown}"
+		if @die_counter > 0
+			text.push "X"
+		else
+			if @hp < max_hp
+				text.push "H:#{@hp - max_hp}"
+			if @cooldown
+				text.push "C:#{@cooldown}"
+			if @cooldown_heal
+				text.push "h:#{@cooldown_heal}"
 		if text.length
 			TermUI.out text.join('/')
 		
 class World
 	constructor : ->
 		@next_id = 0
-		@brain = new Brain(num_inputs, num_actions, opt)
+		@brains = [0,1].map -> new Brain(num_inputs, num_actions, opt)
+		@learning = true
+
+		brain.learning = @learning for brain in @brains		
 		
 		@agents = []
 
@@ -198,7 +247,7 @@ class World
 		@next_id++
 
 	spawn : (team) ->
-		@agents.push new Agent(@,@brain,team)
+		@agents.push new Agent(@,@brains[team],team)
 
 	enemy : (me) ->
 		enemies = _.filter @agents, (x) -> x != me
@@ -211,14 +260,9 @@ class World
 	tick : ->
 		@clock++
 
-		for agent in @agents
-			agent.forward()
-
-		for agent in @agents
-			agent.tick()
-
-		for agent in @agents
-			agent.backward()
+		agent.forward() for agent in @agents			
+		agent.tick() for agent in @agents
+		agent.backward() for agent in @agents			
 
 		N = @agents.length
 		deads = _.filter @agents, (x) -> x.dead
@@ -227,13 +271,15 @@ class World
 			for dead in deads
 				@spawn(dead.team)
 			
-
-		@dump() if @clock > opt.learning_steps_burnin / 2 or @clock % 5 == 0 
-		@save(path) if @clock % 100 == 0
+		
 		#@quake() if @clock % 100 == 0
 
+		@dump() if not @learning or @clock > opt.learning_steps_burnin or @clock % 5 == 0 
+		@save(path) if @learning and @clock % 100 == 0
+
 	quake : ->
-		agent.take_damage() for agent in @agents
+		for agent in @agents
+			agent.take_damage()  if Math.random() < 0.5				
 
 	dump : ->
 		TermUI.clear()
@@ -243,14 +289,15 @@ class World
 		@logs.map (log,k) ->
 			TermUI.pos(40,k).out(log)
 		TermUI.pos(0, grid*world_size+2).out("clock:#{@clock}").pos(0,grid*world_size+4)
+		@brains.map (brain,k) ->
+			TermUI.pos(0,grid*world_size+3+k).out("eps:#{brain.epsilon} age:#{brain.age}, loss:#{brain.average_loss_window.get_average()}, s-reward:#{brain.average_reward_window.get_average()}")
 
 	save : (file) ->
-		jsonfile.writeFileSync(file, @brain.value_net.toJSON())
+		jsonfile.writeFileSync("#{team}-#{file}", brain.value_net.toJSON()) for brain,team in @brains
 		@log 'network saved'
 
 	load : (file) ->
-		json = jsonfile.readFileSync(file)
-		@brain.value_net.fromJSON(json)
+		brain.value_net.fromJSON(jsonfile.readFileSync("#{team}-#{file}")) for brain in @brains
 		@log 'network loaded'
 		
 world = new World()
