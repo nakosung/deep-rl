@@ -9,7 +9,9 @@ path = 'network.json'
 num_agents = 4
 
 temporal_window = 2
-num_inputs = num_agents * 6
+world_size = 4
+num_channels = 3 * 2
+num_inputs = world_size * world_size * num_channels
 num_actions = 5 + num_agents-1
 network_size = num_inputs * temporal_window + num_actions * temporal_window + num_inputs
 
@@ -35,7 +37,6 @@ opt =
 	layer_defs : layer_defs
 	tdtrainer_options : tdtrainer_options
 
-world_size = argv.world_size or 16
 screen_size = 20
 grid = Math.floor screen_size / world_size
 max_hp = 10
@@ -65,6 +66,14 @@ TermUI =
 		@out "\x1b[3#{c}m"
 		this
 
+input_array = [1..world_size*world_size*3].map -> 0
+
+reset_input = ->
+	input_array[i-1] = 0 for i in [1..world_size*world_size*num_channels]
+
+write_input = (x,y,ch,val=1) ->
+	input_array[(x-1 + (y-1) * world_size) * num_channels + ch] = val
+
 class Agent
 	actions : [ [1,0], [-1,0], [0,1], [0,-1], 'nothing' ]
 
@@ -84,11 +93,17 @@ class Agent
 		return if @is_dead()
 
 		enemies = @world.enemy(@)
-		input_array = [@team,pos(@x),pos(@y),@hp/max_hp,@cooldown/cooldown,@cooldown_heal/cooldown_heal]
+		
+		reset_input()
+		write_input(@x,@y,0,@hp/max_hp)
+		write_input(@x,@y,1,@cooldown/cooldown)
+		write_input(@x,@y,2,@cooldown_heal/cooldown_heal)
 		for enemy in enemies
-			t = enemy.team * 0.5 
-			t = 1 if enemy.is_dead()
-			input_array = input_array.concat [pos(enemy.x-@x),pos(enemy.y-@y),enemy.hp/max_hp,enemy.cooldown/cooldown,enemy.cooldown_heal/cooldown_heal,t]
+			unless enemy.is_dead()
+				page = Math.abs(enemy.team-@team) + 1
+				write_input(enemy.x,enemy.y,3*page,enemy.hp/max_hp)
+				write_input(enemy.x,enemy.y,3*page+1,enemy.cooldown/cooldown)
+				write_input(enemy.x,enemy.y,3*page+2,enemy.cooldown_heal/cooldown_heal)
 		@action = @brain.forward input_array
 
 	backward : ->
@@ -330,4 +345,4 @@ if world.learning
 	while true
 		world.tick() 
 else		
-	setInterval world.tick.bind(world), 1/10
+	setInterval world.tick.bind(world), 0
