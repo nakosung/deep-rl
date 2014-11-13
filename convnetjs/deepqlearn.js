@@ -170,16 +170,17 @@ var deepqlearn = deepqlearn || { REVISION: 'ALPHA' };
       }
       return w;
     },
-    forward: function(input_array) {
+    forward: function(input_array,r) {
       // compute forward (behavior) pass given the input neuron signals from body
       this.forward_passes += 1;
       this.last_input_array = input_array; // back this up
+      var net_input;
       
       // create network input
       var action;
       if(this.forward_passes > this.temporal_window) {
         // we have enough to actually do something reasonable
-        var net_input = this.getNetInput(input_array);
+        net_input = this.getNetInput(input_array);
         if(this.learning) {
           // compute epsilon for the epsilon-greedy policy
           this.epsilon = Math.min(1.0, Math.max(this.epsilon_min, 1.0-(this.age - this.learning_steps_burnin)/(this.learning_steps_total - this.learning_steps_burnin))); 
@@ -189,7 +190,7 @@ var deepqlearn = deepqlearn || { REVISION: 'ALPHA' };
         var rf = convnetjs.randf(0,1);
         if(rf < this.epsilon) {
           // choose a random action with epsilon probability
-          action = this.random_action();
+          action = r.random_action();
         } else {
           // otherwise use our policy to make decision
           var maxact = this.policy(net_input);
@@ -198,8 +199,8 @@ var deepqlearn = deepqlearn || { REVISION: 'ALPHA' };
       } else {
         // pathological case that happens first few iterations 
         // before we accumulate window_size inputs
-        var net_input = [];
-        action = this.random_action();
+        net_input = [];
+        action = r.random_action();
       }
       
       // remember the state and action we took for backward pass
