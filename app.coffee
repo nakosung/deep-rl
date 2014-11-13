@@ -250,10 +250,10 @@ class World
 
 		@learning = not argv.run
 
-		@load(path,@brains) if argv.continue
-
 		@clock = 0
 		@logs = []				
+
+		@load(path,@brains) if argv.continue
 
 		@brains_for_teams = [@free_brains,@free_brains]
 		@brainpool_for_teams = [@brains,@brains]
